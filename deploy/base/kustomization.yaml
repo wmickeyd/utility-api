@@ -3,3 +3,8 @@ kind: Kustomization
 
 resources:
   - deployment.yaml
+
+secretGenerator:
+- name: utility-secrets
+  envs:
+  - .env

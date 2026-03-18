@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 import requests
 import logging
+import os
 from urllib.parse import urlparse
 import yfinance as yf
 from ddgs import DDGS
@@ -74,20 +75,33 @@ def get_news(q: str = Query(..., description="News topic")):
 
 @app.get("/weather")
 def get_weather(location: str = Query(..., description="Location (e.g. London, New York)")):
+    api_key = os.getenv("WEATHER_API_KEY")
+    if not api_key:
+        return JSONResponse({"error": "Weather API key not configured"}, status_code=500)
+    
     try:
-        url = f"https://wttr.in/{location}?format=j1"
-        r = requests.get(url, headers=HEADERS, timeout=10)
+        # Use weatherapi.com
+        url = f"http://api.weatherapi.com/v1/current.json?key={api_key}&q={location}&aqi=no"
+        r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json()
-        current = data['current_condition'][0]
+        
+        current = data['current']
+        loc_data = data['location']
+        
         return JSONResponse({
-            "location": location,
-            "condition": current['weatherDesc'][0]['value'],
-            "temp": f"{current['temp_C']}°C",
-            "feels_like": f"{current['FeelsLikeC']}°C",
-            "humidity": f"{current['humidity']}%"
+            "location": f"{loc_data['name']}, {loc_data['region']}, {loc_data['country']}",
+            "condition": current['condition']['text'],
+            "temp": f"{current['temp_c']}°C",
+            "temp_f": f"{current['temp_f']}°F",
+            "feels_like": f"{current['feelslike_c']}°C",
+            "feels_like_f": f"{current['feelslike_f']}°F",
+            "humidity": f"{current['humidity']}%",
+            "wind": f"{current['wind_kph']} km/h",
+            "last_updated": current['last_updated']
         })
     except Exception as e:
+        logger.error(f"Error fetching weather from WeatherAPI: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/reddit")

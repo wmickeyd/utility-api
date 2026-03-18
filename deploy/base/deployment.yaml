@@ -19,6 +19,12 @@ spec:
         image: utility-api:latest # To be updated by CI/CD or Kustomize
         ports:
         - containerPort: 8001
+        env:
+        - name: WEATHER_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: utility-secrets
+              key: WEATHER_API_KEY
         resources:
           limits:
             cpu: "200m"
