@@ -10,5 +10,5 @@ namePrefix: dev-
 
 images:
   - name: utility-api
-    newName: utility-api
+    newName: wmcdonald/utility-api
     newTag: latest
