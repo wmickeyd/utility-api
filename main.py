@@ -29,20 +29,58 @@ def health_check():
 @app.get("/finance")
 def get_finance(symbol: str = Query(..., description="Ticker symbol (e.g. AAPL, BTC-USD)")):
     logger.info(f"Received finance request for: {symbol}")
+    
+    # 1. Try Alpha Vantage if key is provided
+    av_key = os.getenv("ALPHA_VANTAGE_KEY")
+    if av_key:
+        try:
+            url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={av_key}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            if "Global Quote" in data and data["Global Quote"]:
+                quote = data["Global Quote"]
+                return JSONResponse({
+                    "symbol": symbol,
+                    "name": symbol, # Alpha Vantage Global Quote doesn't give long name
+                    "price": round(float(quote["05. price"]), 2),
+                    "currency": "USD",
+                    "source": "Alpha Vantage"
+                })
+        except Exception as e:
+            logger.error(f"Alpha Vantage error: {e}")
+
+    # 2. Improved yfinance fallback
     try:
         ticker = yf.Ticker(symbol)
-        info = ticker.fast_info
-        price = info.get('last_price')
-        currency = info.get('currency', 'USD')
         
-        meta = ticker.info
-        name = meta.get('longName', symbol)
+        # Use history for better accuracy than fast_info
+        hist = ticker.history(period="1d")
+        if not hist.empty:
+            price = hist['Close'].iloc[-1]
+        else:
+            # Fallback to fast_info if history fails
+            info = ticker.fast_info
+            price = info.get('last_price')
+            
+        currency = "USD"
+        try:
+            currency = ticker.info.get('currency', 'USD')
+        except: pass
         
+        name = symbol
+        try:
+            name = ticker.info.get('longName', symbol)
+        except: pass
+        
+        if not price or str(price) == "nan":
+            return JSONResponse({"error": f"Could not find price for {symbol}"}, status_code=404)
+
         return JSONResponse({
             "symbol": symbol,
             "name": name,
-            "price": round(price, 2) if price else "N/A",
-            "currency": currency
+            "price": round(float(price), 2),
+            "currency": currency,
+            "source": "yfinance (history)"
         })
     except Exception as e:
         logger.error(f"Error fetching finance data: {e}")

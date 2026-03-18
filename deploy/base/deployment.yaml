@@ -25,6 +25,11 @@ spec:
             secretKeyRef:
               name: utility-secrets
               key: WEATHER_API_KEY
+        - name: ALPHA_VANTAGE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: utility-secrets
+              key: ALPHA_VANTAGE_KEY
         resources:
           limits:
             cpu: "200m"
