@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: utility-api
+  labels:
+    app: utility-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: utility-api
+  template:
+    metadata:
+      labels:
+        app: utility-api
+    spec:
+      containers:
+      - name: utility-api
+        image: utility-api:latest # To be updated by CI/CD or Kustomize
+        ports:
+        - containerPort: 8001
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: utility-api
+spec:
+  selector:
+    app: utility-api
+  ports:
+  - protocol: TCP
+    port: 8001
+    targetPort: 8001
