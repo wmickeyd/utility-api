@@ -168,5 +168,27 @@ def get_reddit(url: str = Query(..., description="Reddit URL")):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.get("/define")
+def define(word: str = Query(..., description="Word to define")):
+    try:
+        url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 404:
+            return JSONResponse({"error": f"Word '{word}' not found."}, status_code=404)
+        r.raise_for_status()
+        data = r.json()[0]
+        
+        definition = data['meanings'][0]['definitions'][0]['definition']
+        part_of_speech = data['meanings'][0]['partOfSpeech']
+        
+        return JSONResponse({
+            "word": word,
+            "phonetic": data.get('phonetic', ''),
+            "part_of_speech": part_of_speech,
+            "definition": definition
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
