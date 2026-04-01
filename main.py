@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 import logging
 import os
+import time
 from urllib.parse import urlparse
 import yfinance as yf
 from ddgs import DDGS
@@ -14,6 +15,33 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+
+class TTLCache:
+    """Simple in-memory cache with per-entry TTL (seconds)."""
+
+    def __init__(self):
+        self._store: dict = {}
+
+    def get(self, key: str):
+        entry = self._store.get(key)
+        if entry and time.monotonic() < entry["expires_at"]:
+            return entry["value"]
+        return None
+
+    def set(self, key: str, value, ttl: int):
+        self._store[key] = {"value": value, "expires_at": time.monotonic() + ttl}
+
+    def invalidate(self, key: str):
+        self._store.pop(key, None)
+
+
+cache = TTLCache()
+
+FINANCE_TTL = 300    # 5 minutes
+WEATHER_TTL = 600    # 10 minutes
+NEWS_TTL    = 900    # 15 minutes
+DEFINE_TTL  = 3600   # 60 minutes
 
 HEADERS = {
     "User-Agent": (
@@ -30,6 +58,11 @@ async def health_check():
 async def get_finance(symbol: str = Query(..., description="Ticker symbol (e.g. AAPL, BTC-USD)")):
     logger.info(f"Received finance request for: {symbol}")
 
+    cached = cache.get(f"finance:{symbol.upper()}")
+    if cached:
+        logger.info(f"Cache hit for finance:{symbol}")
+        return JSONResponse(cached)
+
     # 1. Try Alpha Vantage if key is provided
     av_key = os.getenv("ALPHA_VANTAGE_KEY")
     if av_key:
@@ -40,13 +73,15 @@ async def get_finance(symbol: str = Query(..., description="Ticker symbol (e.g. 
                     data = await r.json()
                     if "Global Quote" in data and data["Global Quote"]:
                         quote = data["Global Quote"]
-                        return JSONResponse({
+                        payload = {
                             "symbol": symbol,
                             "name": symbol,
                             "price": round(float(quote["05. price"]), 2),
                             "currency": "USD",
                             "source": "Alpha Vantage"
-                        })
+                        }
+                        cache.set(f"finance:{symbol.upper()}", payload, FINANCE_TTL)
+                        return JSONResponse(payload)
         except Exception as e:
             logger.error(f"Alpha Vantage error: {e}")
 
@@ -76,13 +111,15 @@ async def get_finance(symbol: str = Query(..., description="Ticker symbol (e.g. 
         if not price or str(price) == "nan":
             return JSONResponse({"error": f"Could not find price for {symbol}"}, status_code=404)
 
-        return JSONResponse({
+        payload = {
             "symbol": symbol,
             "name": name,
             "price": round(float(price), 2),
             "currency": currency,
             "source": "yfinance (history)"
-        })
+        }
+        cache.set(f"finance:{symbol.upper()}", payload, FINANCE_TTL)
+        return JSONResponse(payload)
     except Exception as e:
         logger.error(f"Error fetching finance data: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -114,13 +151,20 @@ async def image_search(q: str = Query(..., description="Image search query")):
 
 @app.get("/news")
 async def get_news(q: str = Query(..., description="News topic")):
+    cached = cache.get(f"news:{q.lower()}")
+    if cached:
+        logger.info(f"Cache hit for news:{q}")
+        return JSONResponse(cached)
+
     try:
         def _ddgs_news():
             with DDGS() as ddgs:
                 return [r for r in ddgs.news(q, max_results=5)]
 
         results = await asyncio.to_thread(_ddgs_news)
-        return JSONResponse({"query": q, "results": results})
+        payload = {"query": q, "results": results}
+        cache.set(f"news:{q.lower()}", payload, NEWS_TTL)
+        return JSONResponse(payload)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -129,6 +173,11 @@ async def get_weather(location: str = Query(..., description="Location (e.g. Lon
     api_key = os.getenv("WEATHER_API_KEY")
     if not api_key:
         return JSONResponse({"error": "Weather API key not configured"}, status_code=500)
+
+    cached = cache.get(f"weather:{location.lower()}")
+    if cached:
+        logger.info(f"Cache hit for weather:{location}")
+        return JSONResponse(cached)
 
     try:
         url = f"http://api.weatherapi.com/v1/current.json?key={api_key}&q={location}&aqi=no"
@@ -140,7 +189,7 @@ async def get_weather(location: str = Query(..., description="Location (e.g. Lon
         current = data['current']
         loc_data = data['location']
 
-        return JSONResponse({
+        payload = {
             "location": f"{loc_data['name']}, {loc_data['region']}, {loc_data['country']}",
             "condition": current['condition']['text'],
             "temp": f"{current['temp_c']}°C",
@@ -150,7 +199,9 @@ async def get_weather(location: str = Query(..., description="Location (e.g. Lon
             "humidity": f"{current['humidity']}%",
             "wind": f"{current['wind_kph']} km/h",
             "last_updated": current['last_updated']
-        })
+        }
+        cache.set(f"weather:{location.lower()}", payload, WEATHER_TTL)
+        return JSONResponse(payload)
     except Exception as e:
         logger.error(f"Error fetching weather from WeatherAPI: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -185,6 +236,11 @@ async def get_reddit(url: str = Query(..., description="Reddit URL")):
 
 @app.get("/define")
 async def define(word: str = Query(..., description="Word to define")):
+    cached = cache.get(f"define:{word.lower()}")
+    if cached:
+        logger.info(f"Cache hit for define:{word}")
+        return JSONResponse(cached)
+
     try:
         url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
         async with aiohttp.ClientSession() as session:
@@ -198,12 +254,14 @@ async def define(word: str = Query(..., description="Word to define")):
         definition = entry['meanings'][0]['definitions'][0]['definition']
         part_of_speech = entry['meanings'][0]['partOfSpeech']
 
-        return JSONResponse({
+        payload = {
             "word": word,
             "phonetic": entry.get('phonetic', ''),
             "part_of_speech": part_of_speech,
             "definition": definition
-        })
+        }
+        cache.set(f"define:{word.lower()}", payload, DEFINE_TTL)
+        return JSONResponse(payload)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
