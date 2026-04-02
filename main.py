@@ -234,6 +234,32 @@ async def get_reddit(url: str = Query(..., description="Reddit URL")):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.get("/youtube")
+async def youtube_transcript(url: str = Query(..., description="YouTube video URL")):
+    cached = cache.get(f"youtube:{url}")
+    if cached:
+        logger.info(f"Cache hit for youtube:{url}")
+        return JSONResponse(cached)
+
+    try:
+        def _fetch_transcript():
+            from youtube_transcript_api import YouTubeTranscriptApi
+            import re
+            match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+            if not match:
+                raise ValueError("Could not extract video ID from URL")
+            entries = YouTubeTranscriptApi.get_transcript(match.group(1))
+            return " ".join(e["text"] for e in entries)[:8000]
+
+        transcript = await asyncio.to_thread(_fetch_transcript)
+        payload = {"url": url, "transcript": transcript}
+        cache.set(f"youtube:{url}", payload, 3600)  # transcripts don't change
+        return JSONResponse(payload)
+    except Exception as e:
+        logger.error(f"YouTube transcript error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/define")
 async def define(word: str = Query(..., description="Word to define")):
     cached = cache.get(f"define:{word.lower()}")
