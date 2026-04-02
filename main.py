@@ -243,17 +243,42 @@ async def youtube_transcript(url: str = Query(..., description="YouTube video UR
 
     try:
         def _fetch_transcript():
-            from youtube_transcript_api import YouTubeTranscriptApi
+            from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
             import re
+
             match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
             if not match:
                 raise ValueError("Could not extract video ID from URL")
-            entries = YouTubeTranscriptApi.get_transcript(match.group(1))
-            return " ".join(e["text"] for e in entries)[:8000]
+            video_id = match.group(1)
 
-        transcript = await asyncio.to_thread(_fetch_transcript)
-        payload = {"url": url, "transcript": transcript}
-        cache.set(f"youtube:{url}", payload, 3600)  # transcripts don't change
+            # Fetch title from YouTube page og:title tag
+            title = url  # fallback
+            try:
+                import urllib.request
+                with urllib.request.urlopen(f"https://www.youtube.com/watch?v={video_id}", timeout=5) as resp:
+                    html = resp.read().decode("utf-8", errors="ignore")
+                t_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                if t_match:
+                    title = t_match.group(1)
+            except Exception:
+                pass
+
+            # Prefer English; fall back to any available transcript
+            try:
+                entries = YouTubeTranscriptApi.get_transcript(video_id, languages=["en", "en-US", "en-GB"])
+            except NoTranscriptFound:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                entries = transcript_list.find_transcript(
+                    transcript_list._manually_created_transcripts or
+                    list(transcript_list._generated_transcripts.keys())
+                ).fetch()
+
+            transcript = " ".join(e["text"] for e in entries)[:8000]
+            return title, transcript
+
+        title, transcript = await asyncio.to_thread(_fetch_transcript)
+        payload = {"url": url, "title": title, "transcript": transcript}
+        cache.set(f"youtube:{url}", payload, 3600)
         return JSONResponse(payload)
     except Exception as e:
         logger.error(f"YouTube transcript error: {e}")
