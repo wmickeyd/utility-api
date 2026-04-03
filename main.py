@@ -285,6 +285,71 @@ async def youtube_transcript(url: str = Query(..., description="YouTube video UR
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/lego/search")
+async def search_lego(q: str = Query(..., description="LEGO set name or number")):
+    logger.info(f"Received LEGO search request for: {q}")
+    
+    # We'll search across multiple retailers
+    search_query = f"{q} lego set site:lego.com OR site:amazon.com OR site:walmart.com OR site:target.com"
+    
+    try:
+        def _ddgs_lego_search():
+            import re
+            from urllib.parse import unquote
+            with DDGS() as ddgs:
+                results = [r for r in ddgs.text(search_query, max_results=10)]
+                
+                final_results = []
+                for r in results:
+                    url = r['href']
+                    domain = urlparse(url).netloc.lower()
+                    
+                    retailer = None
+                    if "lego.com" in domain: retailer = "lego"
+                    elif "amazon" in domain: retailer = "amazon"
+                    elif "walmart" in domain: retailer = "walmart"
+                    elif "target" in domain: retailer = "target"
+                    
+                    if not retailer:
+                        continue
+                        
+                    # Extract product number
+                    prod_num = None
+                    # LEGO.com pattern: set-name-12345
+                    m = re.search(r"-(\d{5,7})$", url.split("?")[0].rstrip("/"))
+                    if m:
+                        prod_num = m.group(1)
+                    else:
+                        # General 5-7 digit number pattern for other retailers
+                        m2 = re.search(r"\b(\d{5,7})\b", url)
+                        if m2:
+                            prod_num = m2.group(1)
+                    
+                    if prod_num:
+                        final_results.append({
+                            "name": r['title'].split("|")[0].split(":")[0].strip(),
+                            "product_number": prod_num,
+                            "retailer": retailer,
+                            "url": url
+                        })
+                
+                # Deduplicate by (product_number, retailer)
+                seen = set()
+                unique_results = []
+                for res in final_results:
+                    key = (res['product_number'], res['retailer'])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_results.append(res)
+                
+                return unique_results[:5]
+
+        results = await asyncio.to_thread(_ddgs_lego_search)
+        return JSONResponse({"query": q, "results": results})
+    except Exception as e:
+        logger.error(f"LEGO search error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.get("/define")
 async def define(word: str = Query(..., description="Word to define")):
     cached = cache.get(f"define:{word.lower()}")
